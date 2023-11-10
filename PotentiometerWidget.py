@@ -11,8 +11,9 @@ def frequency_serial_data_map():
 
 
 class PotentiometerWidget(tk.Canvas):
-    def __init__(self, master, radius, ser, pot_func="linear", **kwargs):
+    def __init__(self, master, radius, ser, pot_func="linear", range_max=1024, **kwargs):
         super().__init__(master, **kwargs)
+        self.angle_degrees_limit = 0
         self.pot_func = pot_func
         self.radius = radius
         self.center_x = 0
@@ -20,8 +21,8 @@ class PotentiometerWidget(tk.Canvas):
         self.current_ray = None
         self.starting_angle_degrees = -135
         self.ser = serial.Serial(ser, baudrate=9600)
-        self.range_max = 1024
-        self.range_min = 1
+        self.range_max = range_max
+        self.range_min = 1 # always equals 1
         self.log_speed_factor = 2  # velocità crescita
         self.bind("<Configure>", self.setup)
         self.bind("<Button-1>", self.draw_ray)
@@ -44,22 +45,25 @@ class PotentiometerWidget(tk.Canvas):
             self.delete(self.current_ray)
 
         x, y = event.x, event.y
+        print(f"click (x, y): ({x}, {y})")
         angle = math.atan2(self.center_y - y, x - self.center_x)
         angle_degrees = angle * (180.0 / math.pi)
 
         if -135 <= angle_degrees <= -90:
-            angle_degrees_limit = -135
+            self.angle_degrees_limit = -135
         elif -90 <= angle_degrees <= -45:
-            angle_degrees_limit = -45
+            self.angle_degrees_limit = -45
         else:
-            angle_degrees_limit = angle_degrees
+            self.angle_degrees_limit = angle_degrees
 
-        angle_radians = angle_degrees_limit * (math.pi / 180.0)
+        angle_radians = self.angle_degrees_limit * (math.pi / 180.0)
         x1 = self.center_x + self.radius * math.cos(angle_radians)
         y1 = self.center_y - self.radius * math.sin(angle_radians)
 
         self.current_ray = self.create_line(self.center_x, self.center_y, x1, y1, fill="black", width=8)
+        self.send_pot_value_to_serial(self.angle_degrees_limit)
 
+    def send_pot_value_to_serial(self, angle_degrees_limit):
         if -180 <= angle_degrees_limit <= -135:
             angle_map = abs(angle_degrees_limit + 135)
         elif -45 <= angle_degrees_limit <= 180:
@@ -68,18 +72,31 @@ class PotentiometerWidget(tk.Canvas):
             angle_map = "None"
 
         pot_value_range_max = int((angle_map / 270) * (self.range_max - 1)) + 1
-        if self.pot_func == "log":
-            pot_value_1000 = pot_value_range_max / (self.range_max / 100)
-            pot_value_range_max_log = self.range_min * (self.range_max / self.range_min) ** (pot_value_1000 / 100)
+        if self.pot_func == "exp":
+            # y = a + e^(b * x)
+            # find a, b -> conditions: pass through P1(0, 1) and P2(max, max) because we want to map range the linear
+            #                          range [0, max] in exponential range [1, max]
+            #
+            # pass through P1(0, 1)       -> 1 = a + e^(b * 0)
+            #                                a = 0
+            # pass through P2(max, max) -> max = e^(b * max)
+            #                                b = ln(max) / max
+            # y = e^(ln(max) / max * x) is equal to max^(x/max), so:
+            pot_value_range_max_log = self.range_max ** (pot_value_range_max / self.range_max)
             self.ser.write((str(int(pot_value_range_max_log))).encode() + "\n".encode())
+        elif self.pot_func == "linear":
+            self.ser.write((str(pot_value_range_max)).encode() + "\n".encode())
 
-        print(f"click (x, y): ({x}, {y})")
         print(f"degrees angle limited: {angle_degrees_limit}")
         print(f"angle map = {angle_map}")
         print(f"pot_value_range_max = {pot_value_range_max}")
-        if self.pot_func == "log":
-            print(f"pot_value_1000 = {pot_value_1000}")
-            print(f"pot_value = {pot_value_range_max_log}\n")
+        if self.pot_func == "exp":
+            print(f"pot_value_range_max_log = {int(pot_value_range_max_log)}\n")
+
+    def linear_value(self, x1, y1, x2, y2, x):
+        m = (y2 - y1) / (x2 - x1)
+        q = y1 - m * x1
+        return m * x + q
 
     def draw_initial_ray(self):
         initial_angle_degrees = self.starting_angle_degrees
@@ -99,7 +116,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     root.title("Widget Cerchio con Raggi")
 
-    pot = PotentiometerWidget(root,ser=serial_port, pot_func="log", radius=100)
+    pot = PotentiometerWidget(root, ser=serial_port, range_max=2**10, pot_func="exp", radius=100)
     pot.pack(fill=tk.BOTH, expand=True)
 
     root.mainloop()
