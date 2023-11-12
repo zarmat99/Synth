@@ -1,27 +1,34 @@
+# implementare la gestione dell'inviluppo (attack, decay e release automatici e sustain funzione del tempo del tasto)
+# cercare di capire come mai il ciclo for esce prima di duration nonostante gli array sono uguali (non cambio nulla)
+# provare l'implementazione non periodo per periodo ma magari n periodo per n periodo
 # acquistare potenziometro lineare e poi usare la formula completa qua:
-# serial_data                                                              -> [0, 1024]
-# log_serial_data = 1024^(serial_data/1024)                                -> [0, 1024]
-# log_serial_data_20khz = (log_serial_data-1) * (20000-20) / (1024-1) + 20 -> [20, 20000]
+#       serial_data                                                              -> [0, 1024]
+#       log_serial_data = 1024^(serial_data/1024)                                -> [0, 1024]
+#       log_serial_data_20khz = (log_serial_data-1) * (20000-20) / (1024-1) + 20 -> [20, 20000]
 
 import time
 import threading
+import keyboard
 import pyaudio
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import serial
 import PotentiometerWidget
 import tkinter as tk
 import tkinter.messagebox
 import customtkinter
 
+is_playing = False
 waveform = "sine"
 t = []
-audio_data = np
 rate = 200000
+audio_data = np.zeros(0)
 frequency = 20
 bit = 10
 range_max = 2 ** bit
 plot_event = 0
+duration = 20
 
 
 def plot_task():
@@ -29,18 +36,17 @@ def plot_task():
     global audio_data
     global plot_event
 
-    fig = 0
-    ax = 0
-
+    fig, ax = 0, 0
     plt.ion()
+
     while plot_event:
         if any(t):
             if not fig and not ax:
                 fig, ax = plt.subplots()
             ax.clear()
-            ax.plot(t, audio_data)
+            ax.plot(t, audio_data[0])
             plt.pause(0.1)
-        time.sleep(1)
+        time.sleep(0.1)
 
     if fig and ax:
         plt.close(fig)
@@ -53,24 +59,29 @@ def sound_task():
     global rate
     global frequency
     global audio_data
+    global frequency
+    global rate
+    global duration
 
     p = pyaudio.PyAudio()
-    stream = p.open(format=pyaudio.paFloat32,
-                    channels=1,
-                    rate=rate,
-                    output=True)
+    stream = p.open(format=pyaudio.paFloat32, channels=1, rate=rate, output=True)
+    # audio_data_old = array_to_matrix(np.zeros(rate * duration), rate / frequency)
+
     while True:
         if frequency != 0:
-            stream.write(np.array(audio_data).tobytes())
-            # time.sleep(1 / frequency)
+            if keyboard.is_pressed("ctrl"):
+                audio_data_old = audio_data
+                for period_wave in audio_data:
+                    if keyboard.is_pressed("ctrl") and np.array_equal(audio_data_old, audio_data):
+                        stream.write(np.array(period_wave).tobytes())
+                    else:
+                        break
+                print("complete")
+                # time.sleep(1 / frequency)
 
     stream.stop_stream()
     stream.close()
     p.terminate()
-
-
-def map_to_20_20k(value):
-    return int((value - 1) * (20000 - 20) / (range_max - 1) + 20)
 
 
 def pot_task():
@@ -81,22 +92,61 @@ def pot_task():
     global ser
 
     while True:
-        serial_data = int(ser.readline().decode().strip())
-        frequency = map_to_20_20k(serial_data)
+        pot_value_freq = my_gui.potentiometer_freq.pot_value
+        pot_value_fm_mod = my_gui.potentiometer_fm_mod.pot_value - 1
+        frequency = map_to_20_20k(pot_value_freq)
         period = 1 / frequency
+        period_samples = int(rate * period)
+        total_samples = int(rate * duration)
+        t = np.linspace(0, duration, total_samples, endpoint=False)
 
-        print(f"serial_data = {serial_data}")
-        print(f"frequency: {frequency}")
-        print(f"waveform: {waveform}")
-        num_samples = int(rate * period)
-
-        t = np.linspace(0, period, num_samples, endpoint=False)
         if waveform == "sine":
-            audio_data = 0.5 * np.sin(2 * np.pi * frequency * t)
+            modulated_wave = apply_fm_modulation(pot_value_fm_mod, 1, duration, rate)
+            modulated_wave = modulated_wave[:len(t)]
+            audio_data = 0.5 * np.sin(2 * np.pi * (frequency + modulated_wave) * t)
         elif waveform == "square":
             audio_data = 0.5 * np.sign(np.sin(2 * np.pi * frequency * t))
         elif waveform == "sawtooth":
-            audio_data = 2 * (t * frequency - np.floor(0.5 + t * frequency))
+            audio_data = 0.5 * (t * frequency - np.floor(0.5 + t * frequency))
+
+        audio_data = array_to_matrix(audio_data, period_samples)
+
+        print(f"pot_value_freq = {pot_value_freq}")
+        print(f"pot_value_fm_mod = {pot_value_fm_mod}")
+        print(f"frequency: {frequency}")
+        print(f"waveform: {waveform}")
+        time.sleep(0.01)
+
+
+def array_to_matrix(input_array, row_length):
+    col_length = len(input_array) // row_length
+    elements_exceeding = len(input_array) % row_length
+    if elements_exceeding != 0:
+        input_array = input_array[:-elements_exceeding]
+    matrix = np.array(input_array).reshape((col_length, row_length))
+
+    return matrix
+
+
+def apply_fm_modulation(modulator_freq, modulation_index, duration, sample_rate):
+    t = np.arange(0, duration, 1/sample_rate)
+    modulator_wave = np.sin(2 * np.pi * modulator_freq * t)
+    return modulation_index * modulator_wave
+
+
+def generate_envelope(attack_time, decay_time, sustain_level, release_time, sample_rate):
+    attack = np.linspace(0, 1, int(attack_time * sample_rate), endpoint=False)
+    decay = np.linspace(1, sustain_level, int(decay_time * sample_rate), endpoint=False)
+    sustain = np.full(int(sample_rate), sustain_level)
+    release = np.linspace(sustain_level, 0, int(release_time * sample_rate), endpoint=False)
+
+    envelope = np.concatenate([attack, decay, sustain, release])
+
+    return envelope
+
+
+def map_to_20_20k(value):
+    return int((range_max**(value / range_max) - 1) * (20000 - 20) / (range_max - 1) + 20)
 
 
 def open_serial_communication(com_port="COM7", baud_rate=9600):
@@ -118,29 +168,29 @@ class GUI:
         self.button_square = tk.Button(master, text="Square", command=self.button_square_event)
         self.button_sawtooth = tk.Button(master, text="Sawtooth", command=self.button_sawtooth_event)
         self.button_plot = tk.Button(master, text="Open Plot", command=self.button_plot_event)
-        self.potentiometer = PotentiometerWidget.PotentiometerWidget(root, ser="COM8", range_max=2**10,
-                                                                     pot_func="exp", radius=100)
+        self.potentiometer_freq = PotentiometerWidget.PotentiometerWidget(root, range_max=2**10,
+                                                                     pot_func="linear", radius=50)
+        self.potentiometer_fm_mod = PotentiometerWidget.PotentiometerWidget(root, range_max=100,
+                                                                     pot_func="linear", radius=50)
 
         self.button_sine.grid(row=0, column=0, padx=10, pady=10)
         self.button_square.grid(row=0, column=1, padx=10, pady=10)
         self.button_sawtooth.grid(row=0, column=2, padx=10, pady=10)
-        self.potentiometer.grid(row=1, column=0, columnspan=3)
+        self.potentiometer_freq.grid(row=1, column=0)
+        self.potentiometer_fm_mod.grid(row=1, column=1)
         self.button_plot.grid(row=2, column=0, columnspan=3, padx=10, pady=10)
 
     def button_sine_event(self):
         global waveform
         waveform = "sine"
-        self.potentiometer.send_pot_value_to_serial(self.potentiometer.angle_degrees_limit)
 
     def button_square_event(self):
         global waveform
         waveform = "square"
-        self.potentiometer.send_pot_value_to_serial(self.potentiometer.angle_degrees_limit)
 
     def button_sawtooth_event(self):
         global waveform
         waveform = "sawtooth"
-        self.potentiometer.send_pot_value_to_serial(self.potentiometer.angle_degrees_limit)
 
     def button_plot_event(self):
         global plot_event
@@ -156,13 +206,12 @@ class GUI:
 
 
 if __name__ == '__main__':
-    ser = open_serial_communication()
+    root = tk.Tk()
+    my_gui = GUI(root)
     sound_thread = threading.Thread(target=sound_task)
     pot_thread = threading.Thread(target=pot_task)
     sound_thread.start()
     pot_thread.start()
-    root = tk.Tk()
-    my_gui = GUI(root)
     root.mainloop()
 
 

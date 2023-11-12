@@ -11,16 +11,16 @@ def frequency_serial_data_map():
 
 
 class PotentiometerWidget(tk.Canvas):
-    def __init__(self, master, radius, ser, pot_func="linear", range_max=1024, **kwargs):
+    def __init__(self, master, radius, pot_func="linear", range_max=1024, **kwargs):
         super().__init__(master, **kwargs)
         self.angle_degrees_limit = 0
+        self.pot_value = 0
         self.pot_func = pot_func
         self.radius = radius
         self.center_x = 0
         self.center_y = 0
         self.current_ray = None
         self.starting_angle_degrees = -135
-        self.ser = serial.Serial(ser, baudrate=9600)
         self.range_max = range_max
         self.range_min = 1 # always equals 1
         self.log_speed_factor = 2  # velocità crescita
@@ -61,9 +61,9 @@ class PotentiometerWidget(tk.Canvas):
         y1 = self.center_y - self.radius * math.sin(angle_radians)
 
         self.current_ray = self.create_line(self.center_x, self.center_y, x1, y1, fill="black", width=8)
-        self.send_pot_value_to_serial(self.angle_degrees_limit)
+        self.map_pot_value(self.angle_degrees_limit)
 
-    def send_pot_value_to_serial(self, angle_degrees_limit):
+    def map_pot_value(self, angle_degrees_limit):
         if -180 <= angle_degrees_limit <= -135:
             angle_map = abs(angle_degrees_limit + 135)
         elif -45 <= angle_degrees_limit <= 180:
@@ -83,9 +83,9 @@ class PotentiometerWidget(tk.Canvas):
             #                                b = ln(max) / max
             # y = e^(ln(max) / max * x) is equal to max^(x/max), so:
             pot_value_range_max_log = self.range_max ** (pot_value_range_max / self.range_max)
-            self.ser.write((str(int(pot_value_range_max_log))).encode() + "\n".encode())
+            self.pot_value = pot_value_range_max_log
         elif self.pot_func == "linear":
-            self.ser.write((str(pot_value_range_max)).encode() + "\n".encode())
+            self.pot_value = pot_value_range_max
 
         print(f"degrees angle limited: {angle_degrees_limit}")
         print(f"angle map = {angle_map}")
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     root = tk.Tk()
     root.title("Widget Cerchio con Raggi")
 
-    pot = PotentiometerWidget(root, ser=serial_port, range_max=2**10, pot_func="exp", radius=100)
+    pot = PotentiometerWidget(root, range_max=2**10, pot_func="exp", radius=100)
     pot.pack(fill=tk.BOTH, expand=True)
 
     root.mainloop()
